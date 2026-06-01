@@ -1,186 +1,217 @@
 const BASE_URL = import.meta.env.VITE_API_URL;
 
+const storage = {
+  getToken() {
+    return localStorage.getItem('token');
+  },
+  getUser() {
+    try {
+      const raw = localStorage.getItem('user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  },
+  setAuth(token, user) {
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+  },
+  clearAuth() {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  }
+};
+
 const getHeaders = (isMultipart = false) => {
-  const token = localStorage.getItem('token');
+  const token = storage.getToken();
   const headers = {};
-  
+
   if (!isMultipart) {
     headers['Content-Type'] = 'application/json';
   }
-  
+
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  
+
   return headers;
 };
 
+const handleUnauthorized = () => {
+  storage.clearAuth();
+};
+
 const handleResponse = async (response) => {
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.message || 'Something went wrong');
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
   }
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      handleUnauthorized();
+    }
+
+    const error = new Error(data.message || 'Something went wrong');
+    error.status = response.status;
+    throw error;
+  }
+
   return data;
+};
+
+const request = async (url, options = {}) => {
+  const res = await fetch(`${BASE_URL}${url}`, options);
+  return handleResponse(res);
 };
 
 export const api = {
   auth: {
     login: async (username, password) => {
-      const res = await fetch(`${BASE_URL}/auth/login`, {
+      const data = await request('/auth/login', {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ username, password })
       });
-      const data = await handleResponse(res);
-      if (data.token) {
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
+
+      if (data.token && data.user) {
+        storage.setAuth(data.token, data.user);
       }
+
       return data;
     },
+
     adminLogin: async (username, password) => {
-      const res = await fetch(`${BASE_URL}/auth/admin-login`, {
+      const data = await request('/auth/admin-login', {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ username, password })
       });
-      const data = await handleResponse(res);
-      if (data.token) {
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
+
+      if (data.token && data.user) {
+        storage.setAuth(data.token, data.user);
       }
+
       return data;
     },
+
     register: async (username, password) => {
-      const res = await fetch(`${BASE_URL}/auth/register`, {
+      const data = await request('/auth/register', {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ username, password })
       });
-      const data = await handleResponse(res);
-      if (data.token) {
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
+
+      if (data.token && data.user) {
+        storage.setAuth(data.token, data.user);
       }
+
       return data;
     },
+
     logout: () => {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      storage.clearAuth();
     },
-    getCurrentUser: () => {
-      const userStr = localStorage.getItem('user');
-      return userStr ? JSON.parse(userStr) : null;
-    },
-    isAuthenticated: () => {
-      return !!localStorage.getItem('token');
-    },
-    getTotalUsers: async () => {
-      const res = await fetch(`${BASE_URL}/auth/users/count`, {
-        headers: getHeaders(),
-      });
-      return res.json();
-    },
-    getProfile: async () => {
-      const res = await fetch(`${BASE_URL}/auth/profile`, {
+
+    getCurrentUser: () => storage.getUser(),
+    getToken: () => storage.getToken(),
+    isAuthenticated: () => !!storage.getToken(),
+    isAdmin: () => storage.getUser()?.role === 'admin',
+
+    getTotalUsers: async () =>
+      request('/auth/users/count', {
         method: 'GET',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    }
+      }),
+
+    getProfile: async () =>
+      request('/auth/profile', {
+        method: 'GET',
+        headers: getHeaders()
+      })
   },
 
   documents: {
-    list: async () => {
-      const res = await fetch(`${BASE_URL}/documents`, {
+    list: async () =>
+      request('/documents', {
         method: 'GET',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    },
+      }),
+
     upload: async (file) => {
       const formData = new FormData();
       formData.append('file', file);
-      
-      const res = await fetch(`${BASE_URL}/documents/upload`, {
+
+      return request('/documents/upload', {
         method: 'POST',
-        headers: getHeaders(true), 
+        headers: getHeaders(true),
         body: formData
       });
-      return handleResponse(res);
     },
-    delete: async (id) => {
-      const res = await fetch(`${BASE_URL}/documents/${id}`, {
+
+    delete: async (id) =>
+      request(`/documents/${id}`, {
         method: 'DELETE',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    }
+      })
   },
 
   qa: {
     list: async (search = '') => {
-      const url = search ? `${BASE_URL}/qa?search=${encodeURIComponent(search)}` : `${BASE_URL}/qa`;
-      const res = await fetch(url, {
+      const url = search ? `/qa?search=${encodeURIComponent(search)}` : '/qa';
+      return request(url, {
         method: 'GET',
         headers: getHeaders()
       });
-      return handleResponse(res);
     },
-    create: async (question, answer) => {
-      const res = await fetch(`${BASE_URL}/qa`, {
+
+    create: async (question, answer) =>
+      request('/qa', {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ question, answer })
-      });
-      return handleResponse(res);
-    },
-    update: async (id, question, answer) => {
-      const res = await fetch(`${BASE_URL}/qa/${id}`, {
+      }),
+
+    update: async (id, question, answer) =>
+      request(`/qa/${id}`, {
         method: 'PUT',
         headers: getHeaders(),
         body: JSON.stringify({ question, answer })
-      });
-      return handleResponse(res);
-    },
-    delete: async (id) => {
-      const res = await fetch(`${BASE_URL}/qa/${id}`, {
+      }),
+
+    delete: async (id) =>
+      request(`/qa/${id}`, {
         method: 'DELETE',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    }
+      })
   },
 
   chat: {
-    query: async (question, sessionId) => {
-      const res = await fetch(`${BASE_URL}/chat/query`, {
+    query: async (question, sessionId) =>
+      request('/chat/query', {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ question, sessionId })
-      });
-      return handleResponse(res);
-    },
-    getUserHistory: async () => {
-      const res = await fetch(`${BASE_URL}/chat/user-history`, {
+      }),
+
+    getUserHistory: async () =>
+      request('/chat/user-history', {
         method: 'GET',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    },
-    getHistory: async () => {
-      const res = await fetch(`${BASE_URL}/chat/history`, {
+      }),
+
+    getHistory: async () =>
+      request('/chat/history', {
         method: 'GET',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    },
-    clearHistory: async () => {
-      const res = await fetch(`${BASE_URL}/chat/history`, {
+      }),
+
+    clearHistory: async () =>
+      request('/chat/history', {
         method: 'DELETE',
         headers: getHeaders()
-      });
-      return handleResponse(res);
-    }
+      })
   }
 };

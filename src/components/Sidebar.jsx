@@ -11,9 +11,9 @@ import {
 
 export default function Sidebar({
   user,
-  pastSessions,
+  pastSessions = [],
   currentSessionId,
-  suggestions,
+  suggestions = [],
   loading,
   handleLogout,
   resetChat,
@@ -31,6 +31,7 @@ export default function Sidebar({
           </div>
           <span className="font-bold text-sm text-white">Support Agent</span>
         </div>
+
         {user?.role === 'admin' && (
           <button
             onClick={() => navigate('/dashboard')}
@@ -130,7 +131,9 @@ export default function Sidebar({
                 {user.username?.slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0 leading-tight">
-                <p className="text-[10px] text-gray-500 mb-0.5">Signed in</p>
+                <p className="text-[10px] text-gray-500 mb-0.5">
+                  {user?.role === 'admin' ? 'Admin session' : 'Signed in'}
+                </p>
                 <p className="text-sm font-semibold text-white truncate">
                   {user.username}
                 </p>

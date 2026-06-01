@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import {
@@ -12,17 +12,13 @@ import {
   Plus,
   Search,
   CheckCircle2,
-  FileSpreadsheet,
   AlertTriangle,
   FileIcon,
   MessageSquare,
   RefreshCw,
   Edit2,
   UserCheck,
-  TrendingUp,
-  XCircle,
-  Users,
-  BarChart3
+  TrendingUp
 } from 'lucide-react';
 import {
   AreaChart,
@@ -36,6 +32,11 @@ import {
   Pie,
   Cell
 } from 'recharts';
+
+const normalizeItem = (item) => ({
+  ...item,
+  id: item?._id || item?.id
+});
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -55,17 +56,30 @@ export default function Dashboard() {
   const fileInputRef = useRef(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    if (!api.auth.isAuthenticated()) {
-      navigate('/login');
-    } else {
-      fetchData();
+  const clearMessages = () => {
+    setError('');
+    setSuccess('');
+  };
+
+  const handleAuthError = (err) => {
+    if (err?.status === 401) {
+      api.auth.logout();
+      navigate('/admin-login', { replace: true });
+      return true;
     }
-  }, [navigate]);
+
+    if (err?.status === 403) {
+      navigate('/', { replace: true });
+      return true;
+    }
+
+    return false;
+  };
 
   const fetchData = async () => {
     setLoading(true);
     setError('');
+
     try {
       const [docsRes, qasRes, chatsRes, usersRes] = await Promise.all([
         api.documents.list(),
@@ -73,49 +87,89 @@ export default function Dashboard() {
         api.chat.getHistory(),
         api.auth.getTotalUsers()
       ]);
-      setDocuments(docsRes.data);
-      setQas(qasRes.data);
-      setChats(chatsRes.data);
-      if (usersRes.success) setTotalUsers(usersRes.count);
+
+      setDocuments((docsRes.data || []).map(normalizeItem));
+      setQas((qasRes.data || []).map(normalizeItem));
+      setChats((chatsRes.data || []).map(normalizeItem));
+
+      if (usersRes?.success) {
+        setTotalUsers(usersRes.count || 0);
+      }
     } catch (err) {
-      setError(err.message || 'Error loading dashboard data.');
-      if (
-        err.message?.toLowerCase().includes('not authorized') ||
-        err.message?.toLowerCase().includes('token failed')
-      ) {
-        api.auth.logout();
-        setTimeout(() => navigate('/login'), 1500);
+      if (!handleAuthError(err)) {
+        setError(err.message || 'Error loading dashboard data.');
       }
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    const user = api.auth.getCurrentUser();
+
+    if (!api.auth.isAuthenticated()) {
+      navigate('/admin-login', { replace: true });
+      return;
+    }
+
+    if (!user || user.role !== 'admin') {
+      navigate('/', { replace: true });
+      return;
+    }
+
+    fetchData();
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!qaSearch.trim()) {
+      fetchData();
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.qa.list(qaSearch.trim());
+        setQas((res.data || []).map(normalizeItem));
+      } catch (err) {
+        if (!handleAuthError(err)) {
+          console.error(err);
+        }
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [qaSearch]);
+
   const handleLogout = () => {
     api.auth.logout();
-    navigate('/login');
+    navigate('/admin-login', { replace: true });
   };
 
   const handleFileUpload = async (file) => {
     if (!file) return;
+
+    clearMessages();
     setUploading(true);
-    setError('');
-    setSuccess('');
+
     try {
       await api.documents.upload(file);
-      setSuccess(`Document "${file.name}" uploaded & parsed successfully!`);
+      setSuccess(`Document "${file.name}" uploaded and processed successfully.`);
       const docsRes = await api.documents.list();
-      setDocuments(docsRes.data);
-      fetchData();
+      setDocuments((docsRes.data || []).map(normalizeItem));
+      await fetchData();
     } catch (err) {
-      setError(err.message || 'Failed to upload document.');
+      if (!handleAuthError(err)) {
+        setError(err.message || 'Failed to upload document.');
+      }
     } finally {
       setUploading(false);
     }
   };
 
   const onFileSelectChange = (e) => {
-    if (e.target.files && e.target.files[0]) handleFileUpload(e.target.files[0]);
+    if (e.target.files && e.target.files[0]) {
+      handleFileUpload(e.target.files[0]);
+    }
   };
 
   const handleDragOver = (e) => e.preventDefault();
@@ -128,15 +182,22 @@ export default function Dashboard() {
   };
 
   const handleDeleteDocument = async (id, filename) => {
-    if (!confirm(`Are you sure you want to delete "${filename}"? This will also delete all associated knowledge chunks.`)) return;
-    setError('');
-    setSuccess('');
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${filename}"? This will also delete all associated knowledge chunks.`
+    );
+
+    if (!confirmed) return;
+
+    clearMessages();
+
     try {
       await api.documents.delete(id);
       setSuccess(`Document "${filename}" deleted successfully.`);
-      setDocuments(documents.filter((doc) => doc.id !== id));
+      setDocuments((prev) => prev.filter((doc) => doc.id !== id));
     } catch (err) {
-      setError(err.message || 'Failed to delete document.');
+      if (!handleAuthError(err)) {
+        setError(err.message || 'Failed to delete document.');
+      }
     }
   };
 
@@ -149,74 +210,90 @@ export default function Dashboard() {
 
   const handleOpenEditQa = (qa) => {
     setEditingQa(qa);
-    setQaQuestion(qa.question);
-    setQaAnswer(qa.answer);
+    setQaQuestion(qa.question || '');
+    setQaAnswer(qa.answer || '');
     setShowQaModal(true);
   };
 
   const handleSaveQa = async (e) => {
     e.preventDefault();
+
     if (!qaQuestion.trim() || !qaAnswer.trim()) {
       alert('Please fill out both fields.');
       return;
     }
 
+    clearMessages();
+
     try {
       if (editingQa) {
-        const res = await api.qa.update(editingQa.id, qaQuestion, qaAnswer);
-        setSuccess('QA pair updated successfully.');
-        setQas(qas.map((item) => (item.id === editingQa.id ? res.data : item)));
+        const res = await api.qa.update(editingQa.id, qaQuestion.trim(), qaAnswer.trim());
+        const updatedQa = normalizeItem(res.data);
+
+        setQas((prev) =>
+          prev.map((item) => (item.id === editingQa.id ? updatedQa : item))
+        );
+        setSuccess('Q&A pair updated successfully.');
       } else {
-        const res = await api.qa.create(qaQuestion, qaAnswer);
-        setSuccess('QA pair created successfully.');
-        setQas([res.data, ...qas]);
+        const res = await api.qa.create(qaQuestion.trim(), qaAnswer.trim());
+        const createdQa = normalizeItem(res.data);
+
+        setQas((prev) => [createdQa, ...prev]);
+        setSuccess('Q&A pair created successfully.');
       }
+
       setShowQaModal(false);
+      setEditingQa(null);
+      setQaQuestion('');
+      setQaAnswer('');
     } catch (err) {
-      alert(err.message || 'Failed to save QA pair.');
+      if (!handleAuthError(err)) {
+        alert(err.message || 'Failed to save Q&A pair.');
+      }
     }
   };
 
   const handleDeleteQa = async (id) => {
-    if (!confirm('Are you sure you want to delete this QA pair?')) return;
+    const confirmed = window.confirm('Are you sure you want to delete this Q&A pair?');
+    if (!confirmed) return;
+
+    clearMessages();
+
     try {
       await api.qa.delete(id);
-      setSuccess('QA pair deleted.');
-      setQas(qas.filter((item) => item.id !== id));
+      setQas((prev) => prev.filter((item) => item.id !== id));
+      setSuccess('Q&A pair deleted.');
     } catch (err) {
-      alert(err.message || 'Failed to delete QA pair.');
+      if (!handleAuthError(err)) {
+        alert(err.message || 'Failed to delete Q&A pair.');
+      }
     }
   };
-
-  const handleRefreshQa = async () => {
-    try {
-      const res = await api.qa.list(qaSearch);
-      setQas(res.data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  useEffect(() => {
-    const delayDebounceFn = setTimeout(() => handleRefreshQa(), 300);
-    return () => clearTimeout(delayDebounceFn);
-  }, [qaSearch]);
 
   const handleClearChatHistory = async () => {
-    if (!confirm('Are you sure you want to wipe all chatbot interaction logs? This cannot be undone.')) return;
+    const confirmed = window.confirm(
+      'Are you sure you want to wipe all chatbot interaction logs? This cannot be undone.'
+    );
+
+    if (!confirmed) return;
+
+    clearMessages();
+
     try {
       await api.chat.clearHistory();
-      setSuccess('Chat history cleared.');
       setChats([]);
+      setSuccess('Chat history cleared.');
     } catch (err) {
-      alert(err.message || 'Failed to clear chat logs.');
+      if (!handleAuthError(err)) {
+        alert(err.message || 'Failed to clear chat logs.');
+      }
     }
   };
 
   const formatBytes = (bytes) => {
     if (!bytes) return '0 Bytes';
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB'];
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
   };
@@ -232,39 +309,30 @@ export default function Dashboard() {
     }
   };
 
-  const totalChunks = documents.reduce((sum, doc) => sum + (doc.chunksCount || 0), 0);
-  const qaCount = qas.length;
+  const totalChunks = useMemo(
+    () => documents.reduce((sum, doc) => sum + (doc.chunksCount || 0), 0),
+    [documents]
+  );
+
   const docCount = documents.length;
-  const uniqueSessions = new Set(chats.map((chat) => chat.sessionId).filter(Boolean));
+  const qaCount = qas.length;
+
+  const uniqueSessions = useMemo(() => {
+    return new Set(chats.map((chat) => chat.sessionId).filter(Boolean));
+  }, [chats]);
+
   const totalChats = uniqueSessions.size;
   const totalMessages = chats.length;
 
-  const sourceStats = chats.reduce(
-    (acc, chat) => {
-      acc[chat.source] = (acc[chat.source] || 0) + 1;
-      return acc;
-    },
-    { qa: 0, documents: 0, fallback: 0 }
-  );
-
-  const qaPct = totalMessages > 0 ? (sourceStats.qa / totalMessages) * 100 : 0;
-  const docPct = totalMessages > 0 ? (sourceStats.documents / totalMessages) * 100 : 0;
-  const pieGradient = `conic-gradient(#22c55e 0 ${qaPct}%, #f97316 ${qaPct}% ${qaPct + docPct}%, #52525b ${qaPct + docPct}% 100%)`;
-
-  const activityMap = {};
-  [...chats].reverse().forEach((chat) => {
-    const date = new Date(chat.createdAt).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric'
-    });
-    if (!activityMap[date]) {
-      activityMap[date] = { date, total: 0, qa: 0, documents: 0, fallback: 0 };
-    }
-    activityMap[date].total += 1;
-    activityMap[date][chat.source] += 1;
-  });
-
-  const activityData = Object.values(activityMap);
+  const sourceStats = useMemo(() => {
+    return chats.reduce(
+      (acc, chat) => {
+        acc[chat.source] = (acc[chat.source] || 0) + 1;
+        return acc;
+      },
+      { qa: 0, documents: 0, fallback: 0 }
+    );
+  }, [chats]);
 
   const pieData = [
     { name: 'Custom QA Pair', value: sourceStats.qa, color: '#22c55e' },
@@ -272,21 +340,59 @@ export default function Dashboard() {
     { name: 'Unresolved Fallbacks', value: sourceStats.fallback, color: '#52525b' }
   ];
 
-  const wordsMap = {};
-  chats.forEach((c) => {
-    const words = c.question.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
-    words.forEach((w) => {
-      if (w.length > 3 && !['what', 'how', 'why', 'when', 'this', 'that', 'with'].includes(w)) {
-        wordsMap[w] = (wordsMap[w] || 0) + 1;
+  const activityData = useMemo(() => {
+    const activityMap = {};
+
+    [...chats].reverse().forEach((chat) => {
+      const date = new Date(chat.createdAt).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      });
+
+      if (!activityMap[date]) {
+        activityMap[date] = {
+          date,
+          total: 0,
+          qa: 0,
+          documents: 0,
+          fallback: 0
+        };
       }
+
+      activityMap[date].total += 1;
+      activityMap[date][chat.source] += 1;
     });
-  });
 
-  const topWords = Object.entries(wordsMap)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 15);
+    return Object.values(activityMap);
+  }, [chats]);
 
-  const unresolvedQueries = chats.filter((c) => c.source === 'fallback').slice(0, 5);
+  const topWords = useMemo(() => {
+    const wordsMap = {};
+    const skipWords = ['what', 'how', 'why', 'when', 'this', 'that', 'with'];
+
+    chats.forEach((c) => {
+      const words = (c.question || '')
+        .toLowerCase()
+        .replace(/[^\w\s]/g, '')
+        .split(/\s+/);
+
+      words.forEach((w) => {
+        if (w.length > 3 && !skipWords.includes(w)) {
+          wordsMap[w] = (wordsMap[w] || 0) + 1;
+        }
+      });
+    });
+
+    return Object.entries(wordsMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15);
+  }, [chats]);
+
+  const unresolvedQueries = useMemo(
+    () => chats.filter((c) => c.source === 'fallback').slice(0, 5),
+    [chats]
+  );
+
   const authenticatedChats = chats.filter((c) => c.userId).length;
   const anonymousChats = totalMessages - authenticatedChats;
   const avgInteractions = totalChats > 0 ? (totalMessages / totalChats).toFixed(1) : 0;
@@ -299,9 +405,7 @@ export default function Dashboard() {
             <div className="p-2 bg-brand-dark-900 border border-brand-orange/20 rounded-xl">
               <LayoutDashboard className="w-5 h-5 text-brand-orange" />
             </div>
-            <div>
-              <span className="font-bold text-lg text-white">Bot Console</span>
-            </div>
+            <span className="font-bold text-lg text-white">Bot Console</span>
           </div>
 
           <nav className="space-y-1">
@@ -326,7 +430,7 @@ export default function Dashboard() {
               }`}
             >
               <FileText className="w-4 h-4" />
-              Knowledge base
+              Knowledge Base
             </button>
 
             <button
@@ -359,15 +463,16 @@ export default function Dashboard() {
           <div className="flex items-center justify-between px-2">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-9 h-9 rounded-full border border-brand-orange/30 bg-brand-orange-950/20 flex items-center justify-center text-[11px] font-semibold text-brand-orange flex-shrink-0">
-                {(api.auth.getCurrentUser?.()?.username || 'AD').substring(0, 2).toUpperCase()}
+                {(api.auth.getCurrentUser()?.username || 'AD').slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0 leading-tight">
                 <p className="text-[10px] text-gray-500 mb-0.5">Signed in</p>
                 <p className="text-sm font-semibold text-white truncate max-w-[140px]">
-                  {api.auth.getCurrentUser?.()?.username || 'Admin'}
+                  {api.auth.getCurrentUser()?.username || 'Admin'}
                 </p>
               </div>
             </div>
+
             <button
               onClick={handleLogout}
               title="Sign out"
@@ -388,21 +493,22 @@ export default function Dashboard() {
                   ? 'Custom QA Manager'
                   : activeTab === 'chats'
                   ? 'User Logs'
+                  : activeTab === 'documents'
+                  ? 'Knowledge Base'
                   : 'Dashboard'}
               </h1>
               <p className="text-sm text-gray-400">
                 Configure parameters and feed sources to support customer chatbot agents.
               </p>
             </div>
-            <div>
-              <button
-                onClick={fetchData}
-                disabled={loading}
-                className="p-2.5 bg-brand-dark-900 border border-brand-dark-800 rounded-xl hover:border-brand-orange/30 text-gray-400 hover:text-white transition-all duration-200 disabled:opacity-50"
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
+
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              className="p-2.5 bg-brand-dark-900 border border-brand-dark-800 rounded-xl hover:border-brand-orange/30 text-gray-400 hover:text-white transition-all duration-200 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
           </header>
 
           {error && (
@@ -426,7 +532,9 @@ export default function Dashboard() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="glow-card p-6 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Total Users</p>
+                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+                      Total Users
+                    </p>
                     <p className="text-3xl font-extrabold text-white mt-2">{totalUsers}</p>
                   </div>
                   <div className="p-3.5 bg-brand-dark-950 border border-brand-dark-800 text-brand-orange rounded-xl">
@@ -436,7 +544,9 @@ export default function Dashboard() {
 
                 <div className="glow-card p-6 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Documents</p>
+                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+                      Documents
+                    </p>
                     <p className="text-3xl font-extrabold text-white mt-2">{docCount}</p>
                   </div>
                   <div className="p-3.5 bg-brand-dark-950 border border-brand-dark-800 text-brand-orange rounded-xl">
@@ -446,7 +556,9 @@ export default function Dashboard() {
 
                 <div className="glow-card p-6 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Avg. Interac./Session</p>
+                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+                      Avg. Interac./Session
+                    </p>
                     <p className="text-3xl font-extrabold text-white mt-2">{avgInteractions}</p>
                   </div>
                   <div className="p-3.5 bg-brand-dark-950 border border-brand-dark-800 text-brand-orange rounded-xl">
@@ -456,7 +568,9 @@ export default function Dashboard() {
 
                 <div className="glow-card p-6 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Total Chats</p>
+                    <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+                      Total Chats
+                    </p>
                     <p className="text-3xl font-extrabold text-white mt-2">{totalChats}</p>
                   </div>
                   <div className="p-3.5 bg-brand-dark-950 border border-brand-dark-800 text-brand-orange rounded-xl">
@@ -469,8 +583,9 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   <div className="glow-card p-6 lg:col-span-2">
                     <h3 className="text-sm font-semibold text-gray-300 mb-6 uppercase tracking-widest">
-                      Interaction Traffic Last {activityData.length} Days
+                      Interaction Traffic — Last {activityData.length} Days
                     </h3>
+
                     {activityData.length > 0 ? (
                       <div className="h-72">
                         <ResponsiveContainer width="100%" height="100%">
@@ -519,7 +634,7 @@ export default function Dashboard() {
                       </div>
                     ) : (
                       <div className="h-72 flex items-center justify-center text-gray-500 text-sm">
-                        Not enough data for chart
+                        Not enough data for chart.
                       </div>
                     )}
                   </div>
@@ -528,6 +643,7 @@ export default function Dashboard() {
                     <h3 className="text-sm font-semibold text-gray-300 mb-6 uppercase tracking-widest">
                       Answer Source Breakdown
                     </h3>
+
                     {chats.length > 0 ? (
                       <>
                         <div className="h-60 relative flex justify-center items-center">
@@ -558,11 +674,14 @@ export default function Dashboard() {
                               />
                             </PieChart>
                           </ResponsiveContainer>
+
                           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                             <span className="text-2xl font-bold text-white">
                               {sourceStats.qa + sourceStats.documents}
                             </span>
-                            <span className="text-[10px] text-gray-400 uppercase tracking-widest">Resolved</span>
+                            <span className="text-[10px] text-gray-400 uppercase tracking-widest">
+                              Resolved
+                            </span>
                           </div>
                         </div>
 
@@ -570,7 +689,10 @@ export default function Dashboard() {
                           {pieData.map((item) => (
                             <div key={item.name} className="flex items-center justify-between text-xs">
                               <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></div>
+                                <div
+                                  className="w-3 h-3 rounded-full"
+                                  style={{ backgroundColor: item.color }}
+                                ></div>
                                 <span className="text-gray-400">{item.name}</span>
                               </div>
                               <span className="text-white font-medium">
@@ -582,7 +704,7 @@ export default function Dashboard() {
                       </>
                     ) : (
                       <div className="h-60 flex items-center justify-center text-gray-500 text-sm">
-                        Not enough data
+                        Not enough data.
                       </div>
                     )}
                   </div>
@@ -601,17 +723,21 @@ export default function Dashboard() {
                     </div>
 
                     <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
-                      {unresolvedQueries && unresolvedQueries.length > 0 ? (
+                      {unresolvedQueries.length > 0 ? (
                         unresolvedQueries.map((chat) => (
                           <div
                             key={chat.id}
                             className="bg-brand-dark-900 border border-brand-dark-700/50 p-3 rounded-lg flex flex-col gap-2"
                           >
-                            <p className="text-sm text-gray-300 font-medium whitespace-pre-wrap">{chat.question}</p>
-                            <p className="text-xs text-gray-500">{new Date(chat.createdAt).toLocaleString()}</p>
+                            <p className="text-sm text-gray-300 font-medium whitespace-pre-wrap">
+                              {chat.question}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(chat.createdAt).toLocaleString()}
+                            </p>
                             <button
                               onClick={() => {
-                                setQaQuestion(chat.question);
+                                setQaQuestion(chat.question || '');
                                 setQaAnswer('');
                                 setEditingQa(null);
                                 setShowQaModal(true);
@@ -627,7 +753,9 @@ export default function Dashboard() {
                         <div className="h-full flex flex-col items-center justify-center text-gray-500 gap-2">
                           <CheckCircle2 className="w-8 h-8 mb-2 text-green-500/50" />
                           <p className="text-sm font-medium">No unresolved queries found!</p>
-                          <p className="text-xs text-gray-600">The bot is answering everything successfully.</p>
+                          <p className="text-xs text-gray-600">
+                            The bot is answering everything successfully.
+                          </p>
                         </div>
                       )}
                     </div>
@@ -635,16 +763,17 @@ export default function Dashboard() {
 
                   <div className="glow-card p-6 flex flex-col h-[400px]">
                     <h3 className="text-sm font-semibold text-gray-300 mb-6 uppercase tracking-widest">
-                      Trending Topics Keywords
+                      Trending Topics / Keywords
                     </h3>
+
                     <div className="flex-1 flex content-start flex-wrap gap-2 overflow-y-auto pr-2 custom-scrollbar">
-                      {topWords && topWords.length > 0 ? (
+                      {topWords.length > 0 ? (
                         topWords.map(([word, count]) => {
                           const sizeClass =
                             count > 10
                               ? 'text-2xl font-bold text-brand-orange'
                               : count > 5
-                              ? 'text-lg font-semibold text-brand-orange-400'
+                              ? 'text-lg font-semibold text-brand-orange/80'
                               : 'text-sm font-medium text-gray-400';
 
                           return (
@@ -676,7 +805,7 @@ export default function Dashboard() {
               <div
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
-                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                onClick={() => fileInputRef.current?.click()}
                 className={`glow-card border-2 border-dashed p-10 text-center cursor-pointer hover:bg-brand-dark-900/40 transition-all duration-300 ${
                   uploading
                     ? 'border-brand-orange/50 bg-brand-orange-950/10 pointer-events-none'
@@ -690,6 +819,7 @@ export default function Dashboard() {
                   accept=".pdf,.docx,.doc,.xlsx,.xls"
                   className="hidden"
                 />
+
                 {uploading ? (
                   <div className="space-y-4 flex flex-col items-center">
                     <div className="w-12 h-12 border-4 border-brand-orange/30 border-t-brand-orange rounded-full animate-spin"></div>
@@ -707,7 +837,8 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <p className="font-semibold text-white">
-                        Drag & drop your document here, or <span className="text-brand-orange hover:underline">browse</span>
+                        Drag & drop your document here, or{' '}
+                        <span className="text-brand-orange hover:underline">browse</span>
                       </p>
                       <p className="text-xs text-gray-400 mt-1">
                         Supports PDF, DOCX, DOC, or Excel spreadsheets • Max 10MB
@@ -720,7 +851,9 @@ export default function Dashboard() {
               <div className="glow-card overflow-hidden opacity-80">
                 <div className="p-6 border-b border-brand-dark-800">
                   <h3 className="font-semibold text-white">Ingested Documents</h3>
-                  <p className="text-xs text-gray-400">Files powering your chatbot's retrieval context.</p>
+                  <p className="text-xs text-gray-400">
+                    Files powering your chatbot's retrieval context.
+                  </p>
                 </div>
 
                 {documents.length === 0 ? (
@@ -761,7 +894,7 @@ export default function Dashboard() {
                               </span>
                             </td>
                             <td className="px-6 py-4 text-gray-400">{formatBytes(doc.fileSize)}</td>
-                            <td className="px-6 py-4 text-center font-mono font-semibold text-brand-orange-400">
+                            <td className="px-6 py-4 text-center font-mono font-semibold text-brand-orange/80">
                               {doc.chunksCount}
                             </td>
                             <td className="px-6 py-4 text-gray-400 text-xs">
@@ -792,7 +925,7 @@ export default function Dashboard() {
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
                   <input
                     type="text"
-                    placeholder="Search QAs..."
+                    placeholder="Search Q&As..."
                     value={qaSearch}
                     onChange={(e) => setQaSearch(e.target.value)}
                     className="w-full bg-[#0d0d0f] border border-brand-dark-800 text-white rounded-xl py-2.5 pl-10 pr-4 focus:outline-none focus:border-brand-orange focus:ring-1 focus:ring-brand-orange text-sm transition-all"
@@ -833,14 +966,18 @@ export default function Dashboard() {
                             <span className="text-xs font-bold text-brand-orange uppercase px-2 py-0.5 bg-brand-orange-950/20 border border-brand-orange/10 rounded-md">
                               Q
                             </span>
-                            <h4 className="font-semibold text-white text-sm sm:text-base">{item.question}</h4>
+                            <h4 className="font-semibold text-white text-sm sm:text-base">
+                              {item.question}
+                            </h4>
                           </div>
 
                           <div className="flex items-start gap-2.5 pl-0.5">
                             <span className="text-xs font-bold text-gray-400 uppercase px-2 py-0.5 bg-brand-dark-950 border border-brand-dark-800 rounded-md flex-shrink-0">
                               A
                             </span>
-                            <p className="text-gray-300 text-sm mt-0.5 whitespace-pre-wrap">{item.answer}</p>
+                            <p className="text-gray-300 text-sm mt-0.5 whitespace-pre-wrap">
+                              {item.answer}
+                            </p>
                           </div>
                         </div>
 
@@ -872,7 +1009,7 @@ export default function Dashboard() {
                 <button
                   onClick={handleClearChatHistory}
                   disabled={chats.length === 0}
-                  className="secondary-btn flex items-center justify-center gap-2 text-sm text-red-400 border-red-950/40 hover:bg-red-950/20 hover:border-red-500/30"
+                  className="secondary-btn flex items-center justify-center gap-2 text-sm text-red-400 border-red-950/40 hover:bg-red-950/20 hover:border-red-500/30 disabled:opacity-50"
                 >
                   <Trash2 className="w-4 h-4" />
                   Clear Chat History
@@ -882,7 +1019,9 @@ export default function Dashboard() {
               <div className="glow-card overflow-hidden opacity-80">
                 <div className="p-6 border-b border-brand-dark-800">
                   <h3 className="font-semibold text-white">User Interaction Logs</h3>
-                  <p className="text-xs text-gray-400">Full audit log of incoming queries and bot resolutions.</p>
+                  <p className="text-xs text-gray-400">
+                    Full audit log of incoming queries and bot resolutions.
+                  </p>
                 </div>
 
                 {chats.length === 0 ? (
@@ -892,7 +1031,10 @@ export default function Dashboard() {
                 ) : (
                   <div className="divide-y divide-brand-dark-850">
                     {chats.map((chat) => (
-                      <div key={chat.id} className="p-6 space-y-3 hover:bg-brand-dark-900/10 transition-colors">
+                      <div
+                        key={chat.id}
+                        className="p-6 space-y-3 hover:bg-brand-dark-900/10 transition-colors"
+                      >
                         <div className="flex justify-between items-center">
                           <span
                             className={`text-[10px] px-2 py-0.5 rounded-full font-bold tracking-wider uppercase ${getSourceBadgeColor(
@@ -905,6 +1047,7 @@ export default function Dashboard() {
                               ? 'Document Context'
                               : 'AI Fallback Response'}
                           </span>
+
                           <span className="text-xs text-gray-500">
                             {new Date(chat.createdAt).toLocaleString()}
                           </span>
@@ -941,7 +1084,7 @@ export default function Dashboard() {
                 onClick={() => setShowQaModal(false)}
                 className="text-gray-400 hover:text-white text-sm"
               >
-                ×
+                Close
               </button>
             </div>
 

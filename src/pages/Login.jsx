@@ -7,7 +7,6 @@ import {
   Terminal,
   AlertCircle,
   Sparkles,
-  ShieldCheck,
   Database,
   MessageSquare,
   BarChart3,
@@ -26,20 +25,21 @@ export default function Login({ isAdminLogin = false }) {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (api.auth.isAuthenticated()) {
-      const user = api.auth.getCurrentUser();
-      if (user?.role === 'admin') {
-        navigate('/dashboard');
-      } else {
-        navigate('/');
-      }
+    const user = api.auth.getCurrentUser();
+
+    if (!user) return;
+
+    if (user.role === 'admin') {
+      navigate('/dashboard', { replace: true });
+    } else {
+      navigate('/', { replace: true });
     }
   }, [navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!username || !password) {
+    if (!username.trim() || !password.trim()) {
       setError('Please fill in all fields');
       return;
     }
@@ -51,19 +51,19 @@ export default function Login({ isAdminLogin = false }) {
       let res;
 
       if (isAdminLogin) {
-        res = await api.auth.adminLogin(username, password);
+        res = await api.auth.adminLogin(username.trim(), password);
       } else if (isRegistering) {
-        res = await api.auth.register(username, password);
+        res = await api.auth.register(username.trim(), password);
       } else {
-        res = await api.auth.login(username, password);
+        res = await api.auth.login(username.trim(), password);
       }
 
       const user = res.user;
 
       if (user?.role === 'admin') {
-        navigate('/dashboard');
+        navigate('/dashboard', { replace: true });
       } else {
-        navigate('/');
+        navigate('/', { replace: true });
       }
     } catch (err) {
       setError(err.message || 'Authentication failed. Please verify your inputs.');
@@ -132,8 +132,6 @@ export default function Login({ isAdminLogin = false }) {
             <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-white/5 border border-white/10 shadow-[0_0_18px_rgba(255,102,0,0.08)] mb-6">
               {isAdminLogin ? (
                 <Terminal className="w-7 h-7 text-brand-orange" />
-              ) : isRegistering ? (
-                <Bot className="w-7 h-7 text-brand-orange" />
               ) : (
                 <Bot className="w-7 h-7 text-brand-orange" />
               )}
@@ -267,7 +265,7 @@ export default function Login({ isAdminLogin = false }) {
                     }}
                     className="text-sm text-gray-500"
                   >
-                    {isRegistering ? "Already have an account? " : "Don't have an account? "}
+                    {isRegistering ? 'Already have an account? ' : "Don't have an account? "}
                     <span className="text-brand-orange font-semibold hover:text-brand-orange/80 transition-colors">
                       {isRegistering ? 'Sign In' : 'Sign Up'}
                     </span>
@@ -275,9 +273,9 @@ export default function Login({ isAdminLogin = false }) {
                 </div>
               )}
 
-              {isAdminLogin && (
+              {isAdminLogin && import.meta.env.DEV && (
                 <p className="text-center text-xs text-gray-500 mt-5">
-                  Default seed credentials are{' '}
+                  Demo admin credentials are{' '}
                   <span className="text-brand-orange font-mono">admin</span> /{' '}
                   <span className="text-brand-orange font-mono">admin123</span>
                 </p>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import Sidebar from '../components/Sidebar';
 import { Send, Terminal } from 'lucide-react';
@@ -58,6 +59,7 @@ function injectDateSeparators(messages) {
 }
 
 export default function Chatbot() {
+  const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [messages, setMessages] = useState([
     {
@@ -276,12 +278,20 @@ export default function Chatbot() {
     ]);
   };
 
-  const handleLogout = () => {
-    api.auth.logout();
-    setUser(null);
-    setPastSessions([]);
-    resetChat();
-  };
+ const handleLogout = () => {
+  const currentUser = api.auth.getCurrentUser();
+
+  api.auth.logout();
+  setUser(null);
+  setPastSessions([]);
+  resetChat();
+
+  if (currentUser?.role === 'admin') {
+    navigate('/admin-login', { replace: true });
+  } else {
+    navigate('/', { replace: true });
+  }
+};
 
   const loadSession = (session) => {
     setCurrentSessionId(session.id);
