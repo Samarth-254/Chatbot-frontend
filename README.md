@@ -14,21 +14,21 @@ The client-side interface for the Customer Support Chatbot System. Built as a hi
 
 <p align="center">
   <h3>💬 Customer Support Chatbot</h3>
-  <img src="../assets/chatbot3.png" alt="Customer Chatbot Interface" width="90%" style="border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />
+  <img src="assets/chatbot3.png" alt="Customer Chatbot Interface" width="90%" style="border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />
 </p>
 
 <br />
 
 <p align="center">
   <h3>📊 Admin Control Panel (Overview)</h3>
-  <img src="../assets/chatbot1.png" alt="Admin Dashboard Analytics" width="90%" style="border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />
+  <img src="assets/chatbot1.png" alt="Admin Dashboard Analytics" width="90%" style="border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />
 </p>
 
 <br />
 
 <p align="center">
   <h3>📂 Knowledge Base & File Ingestion</h3>
-  <img src="../assets/Chatbot2.png" alt="Admin Knowledge Base Manager" width="90%" style="border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />
+  <img src="assets/Chatbot2.png" alt="Admin Knowledge Base Manager" width="90%" style="border-radius: 8px; border: 1px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />
 </p>
 
 ---
